@@ -2,6 +2,8 @@
 
 In this post I'll demonstrate some real-time communication in a simple Application using [ReasonML](https://reasonml.github.io/).  If you're brand new to Reason, some assumed basic comfort in JavaScript should be most of what you need, and there's a handy [cheatsheet](https://reasonml.github.io/docs/en/syntax-cheatsheet) to get you started.  The only other unfamiliar element will be the `|>` pipe operator.  In brief, `a |> b` is the same as `b(a)`.  It can be much more readable when chaining multiple functions.  I'm using the [bs-socket](https://github.com/reasonml-community/bs-socket.io) bindings for [socket.io](https://socket.io/), a widely used Node.js real-time engine, and their [example](https://github.com/reasonml-community/bs-socket.io/tree/master/example) as a base.
 
+The finished application will present each client with a set of named buttons and a dialog box to add a new button, as well as a running total of connected clients.  Clicking a button will remove it from the set, and this set will stay in sync across all connected clients.
+
 ## Requirements
 
 This is a [Node](https://nodejs.org/en/) project.  I'll be using [yarn](https://yarnpkg.com/en/) if you'd like to follow along exactly.  All other dependencies will be handled by node.
@@ -31,13 +33,15 @@ Add a script to your newly generated `package.json` to execute this file:
 "scripts": {
   "build": "bsb -make-world",
   "serve": "node src/ButtonServer.bs.js",  // <- here
-  "start": "bsb -make-world -w",
+  "start:re": "bsb -make-world -w",
   "clean": "bsb -clean-world"
 },
 // ..
 ```
 
-One change I always immediately make in a Node.js App is pulling the port number out.  Luckily, interop is dirt simple!  We can just use Node to grab it from an environment variable.  Create a file at `src/Extern.re` with the following contents:
+I also renamed `start` to `start:re` - feel free to manage your scripts however is most comfortable.
+
+One change I always immediately make in a Node.js app is pulling the port number out so it can be specified via environment variable.  Luckily, interop is dirt simple!  We can just use Node to grab it from an environment variable.  Create a file at `src/Extern.re` with the following contents:
 
 ```reasonml
 [@bs.val] external portEnv: Js.Nullable.t(string) = "process.env.PORT";
@@ -80,7 +84,7 @@ Lets verify it works.  Open up a separate terminal and type `yarn serve`.  You s
 $ yarn serve
 yarn run v1.13.0
 $ node src/ButtonServer.bs.js
-Port: 3000
+Listening at *:3000
 Done in 0.09s
 $
 ```
@@ -131,7 +135,7 @@ type serverToClient =
   | Success((numClients, buttonList));
 ```
 
-These are the various messages we'll be sending back and forth.  This is the biggest difference from using `socket.io` in JavaScript, where custom events are named with strings.  Here we always just emit the generic message but use pattern matching to destructure it.  The library currently doesn't cover stringly typed events, though the one issue open is [asking about it](https://github.com/reasonml-community/bs-socket.io/issues/9).  The readme on that GitHub repo puts it succinctly:  "The API differs a bit from socket.io's API to be more idiomatic in Reason. Generally, e.g. JavaScript's `socket.emit("bla", 10)` becomes `Server.emit(socket, Bla(10))` in Reason".
+These are the various messages we'll be sending back and forth.  This is the biggest difference from using `socket.io` in JavaScript, where custom events are named with strings.  Here we always just emit a generic message but use ReasonML pattern matching to destructure the payload itself.  The library currently doesn't cover stringly typed events, though the one issue open is [asking about it](https://github.com/reasonml-community/bs-socket.io/issues/9).  The readme on that GitHub repo puts it succinctly:  "The API differs a bit from socket.io's API to be more idiomatic in Reason. Generally, e.g. JavaScript's `socket.emit("bla", 10)` becomes `Server.emit(socket, Bla(10))` in Reason".
 
 Take a look at `Messages.bs.js`:
 
@@ -140,9 +144,9 @@ Take a look at `Messages.bs.js`:
 /* This output is empty. Its source's type definitions, externals and/or unused code got optimized away. */
 ```
 
-We haven't used any of these definitions yet, so they don't end up represented at all in our bundle.  Neat!
+They don't end up represented at all in our bundle - it's just a compile-time benefit.  Neat!
 
-## Server
+## The Server
 
 ### Express
 
@@ -195,53 +199,112 @@ If you point your browser, you should see **HELLO REASON**.
 
 ### Socketry
 
-Now for the real-time bits! WRITE ONCE YOU HAVE EXAMPLE WORKING
-
-Start with:
+Now for the real-time bits!  Add the following two lines below your `/` endpoint, but above your call to `Http.listen()`:
 
 ```reason
 module Server = BsSocket.Server.Make(Messages);
 
 let io = Server.createWithHttp(http);
+```
 
+Now `socket.io` is configured to use the newly defined Message types.  To keep track of the current set of buttons and connected clients, we'll need some state:
+
+```reason
+type appState = {
+  buttons: list(string),
+  clients: list(BsSocket.Server.socketT),
+};
+
+let state = ref({buttons: ["Click me"], clients: []});
+```
+
+The state is held inside a mutable `ref`.  We can access the current contents via `state^`, and assign to it with the assignment operator `:=`.  When the server starts up it has no clients and one default button.
+
+Also handy is this helper function to emit a message to every client stored except the client passed:
+
+```reason
+let sendToRest = (socket, msg) =>
+  state^.clients
+  |> List.filter(c => c != socket)
+  |> List.iter(c => Server.Socket.emit(c, msg));
+```
+
+Now everything is set up to define the real meat of the application.  Start with the following outline:
+
+```reason
 Server.onConnect(
   io,
   socket => {
-    open Server;
-    print_endline("Client connected");
-    Socket.on(
-      socket,
-      fun
-      | Msg(msg) => {
-          switch (msg) {
-          | AddButton(name) => print_endline("Add " ++ name)
-          | RemoveButton(name) => print_endline("Remove " ++ name)
-          };
-        }
-      | Howdy => {
-          print_endline("Well howdy back, client");
-        },
-    );
+    // our code here....
   },
 );
 ```
 
-This is a basic skeleton, now we need some state.  We've got two things to keep track of: the current list of buttons and the current connected clients.
+The first part is how to handle a client connecting.  Replace the placeholder comment with the following:
 
 ```reason
-type appState = {
-  buttons: array(string),
-  clients: array(BsSocket.Server.socketT),
-};
-
-let state = {buttons: [|"Click me"|], clients: [||]};
+open Server;
+    print_endline("Client connected");
+    state := {...state^, clients: List.append(state^.clients, [socket])};
+    sendToRest(socket, ClientDelta(1));
+    Socket.emit(
+      socket,
+      Success((List.length(state^.clients), state^.buttons)),
+    );
 ```
 
-The app starts pre-populated with a single button.
+For convenience we'll open our `Server` module into the local scope, and then adjust our state to include the new client.  We use the `sendToRest` function to emit the `ClientDelta` message to everyone else who may already be stored in `state.clients`, and finally send back the `Success` message, telling the newly connected client about the current state.
 
-## Client
+The next order of business is handling the disconnect.  Right below the last `Socket.emit()` call add:
 
-I'd feel remiss if I didn't use the ReasonReact library for this - it's excellent.  First, add the dependencies:
+```reason
+    Socket.onDisconnect(
+      socket,
+      _ => {
+        print_endline("Client disconnected");
+        sendToRest(socket, ClientDelta(-1));
+        state :=
+          {...state^, clients: List.filter(c => c == socket, state^.clients)};
+      },
+    );
+```
+
+The client gets dropped from the app state and everyone else still connected is updated on the change.  The only part left is to handle the `clientToServer` messages we defined in `Messages.re`:
+
+```reason
+Socket.on(
+      socket,
+      fun
+      | Msg(msg) => {
+          switch (msg) {
+          | AddButton(name) =>
+            print_endline("Add " ++ name);
+            state :=
+              {...state^, buttons: state^.buttons |> List.append([name])};
+            sendToRest(socket, Msg(AddButton(name)));
+          | RemoveButton(name) =>
+            print_endline("Remove " ++ name);
+            state :=
+              {
+                ...state^,
+                buttons: state^.buttons |> List.filter(a => a == name),
+              };
+            sendToRest(socket, Msg(RemoveButton(name)));
+          };
+        }
+      | Howdy => {
+          print_endline("Howdy back, client");
+        },
+    );
+```
+
+Whenever a button is added or removed, we adjust our state accordingly and let everyone else know about the change.  That's it for the server!  
+
+## The Client
+
+### Nuts 'n' Bolts
+
+I'd feel remiss if I didn't use the ReasonReact library for this demo.  It's excellent.  First, add the dependencies:
 
 ```
 $ yarn add react react-dom
@@ -266,30 +329,55 @@ While we're in here, let's activate JSX.  Add the following entry to the top lev
   },
 ```
 
-We also need a stub to mount to.  Create a file at your project root called `index.html`:
-  ## NOPE PARCEL ##
+To handle bundling, I'm going to use [Parcel](https://parceljs.org/).  This is not necessary - you're welcome to use anything you're comfortable with.  To follow along, add the dependency:
+
+```
+$ yarn add -D parcel-bundler
+```
+
+Also add a script to `package.json` to run it:
+
+```json
+"scripts": {
+  //..
+  "start:bundle": "parcel watch index.html",
+  //..
+},
+```
+
+We also need to create that `index.html`.  Put it at your project root:
+
 ```html
+<!-- https://github.com/sveltejs/template/issues/12 -->
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>Reason Buttons</title>
+
+    <script id="s"></script>
+    <script>
+        document.getElementById('s').src = "socket.io/socket.io.js"
+    </script>
+
 </head>
 
 <body>
     <div id="app"></div>
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="./require-polyfill.js" data-main="./src/Index.bs.js" data-project-root="./"></script>
+    <script defer src="./src/Index.re"></script>
 </body>
 
 </html>
 ```
 
-We also need to tell our server to serve this file instead of our placeholder string.  We'll use a little more interop from this - add the following to `Extern.re`, helpfully lifted from the [bs-socket example](https://github.com/reasonml-community/bs-socket.io/blob/master/example/ExampleServer.re):
+This stub includes a [workaround](https://github.com/sveltejs/template/issues/12) in the head for using Parcel with socket.io on the client side.  Also note that Parcel understands ReasonML - we can pass in `Index.re` for the entry point directly.  Once this file is here, open a new terminal and enter `yarn start:bundle` - this can be left running and will recompile your bundle when needed.
+
+We now need to tell our server to serve this file instead of our placeholder string.  We'll use a little more interop from this - add the following to `Extern.re`, helpfully lifted from the [bs-socket example](https://github.com/reasonml-community/bs-socket.io/blob/master/example/ExampleServer.re):
 
 ```reason
-
-// are we using this?!
 module Path = {
   type pathT;
   [@bs.module "path"] [@bs.splice]
@@ -302,27 +390,190 @@ module Path = {
 Now replace the endpoint in `ButtonServer.re` with:
 
 ```reason
-let projectRoot = Path.join([|__dirname, ".."|]);
-
-App.useOnPath(
+App.use(
   app,
-  ~path=projectRoot,
   {
     let options = Static.defaultOptions();
-    Static.make("static", options) |> Static.asMiddleware;
+    Static.make(Path.join([|__dirname, "../dist"|]), options)
+    |> Static.asMiddleware;
   },
 );
 
 App.get(app, ~path="/") @@
 Middleware.from((_, _, res) =>
-  res |> Response.sendFile("index.html", {"root": projectRoot})
+  res |> Response.sendFile("index.html", {"root": __dirname})
 );
 ```
 
-We define our project root as the parent of `src/`, set up our static file serving, and serve `index.html` at `/` instead of the placeholder string.
+This sets up our static file serving and serves `dist/index.html`, which is generated by Parcel, at `/` instead of the placeholder string.
 
-New, create a file at `src/ButtonClient.re`
+### Code
 
-## Make it native
+We've pointed Parcel towards `src/Index.re` - might be a good idea to put a file there!  Create it with the following contents:
 
-[A guide to native ReasonML for NodeJS developers](https://www.strv.com/blog/guide-native-reasonml)
+```reason
+ReactDOMRe.renderToElementWithId(<ButtonClient />, "app");
+```
+
+This is how ReasonReact mounts to the DOM.  We're finally ready to build the component.
+
+In a real app, this would ideally be split into several components - one for the buttons, one for the input, maybe a separate one for the counter.  For demonstration purposes I'm just throwing it all in one component, but if this app were to get much larger splitting it apart would likely be step number one.
+
+Create a file at `src/ButtonClient.re`.  First, we'll set up our socket client at the top of the file:
+
+```reason
+module Client = BsSocket.Client.Make(Messages);
+
+let socket = Client.create();
+```
+
+Below that, we need to define the `state` for our component as well as the `action`s we can take to transform that state in order to create a `reducerComponent`:
+
+```reason
+type state = {
+  numClients: int,
+  buttons: list(string),
+  newButtonTitle: string,
+};
+
+type action =
+  | AddButton(string)
+  | ClientDelta(int)
+  | RemoveButton(string)
+  | Success((int, list(string)))
+  | UpdateTitle(string);
+
+let component = ReasonReact.reducerComponent("ButtonClient");
+```
+
+This is pretty similar to the `socket.io` messages, with the addition of a `newButtonTitle` to allow the client to name the buttons they add.
+
+The rest of the component will live in this skeleton:
+
+```reason
+let make = _children => {
+  ...component,
+  initialState: _state => {numClients: 1, buttons: [], newButtonTitle: ""},
+  didMount: self => {
+    // socket.io message handling
+  },
+  reducer: (action, state) =>
+    switch (action) {
+      // actions
+    },
+  render: self =>
+    <div>
+      <h1> {ReasonReact.string("Reason Buttons")} </h1>
+      <div>
+        // Buttons
+      </div>
+      <div>
+        // Add A Button
+      </div>
+      <span>
+        // Current Count
+      </span>
+    </div>,
+};
+```
+
+We'll look at each section separately.  The `initialState` given here will just be used to render the component right off the bat - as soon as our client connects, it's going to receive a `Success` message which will overwrite this value.
+
+We need to translate incoming `socket.io` messages.  I've put this in the `didMount` method to make sure our client has successfully loaded.  Replace the placeholder with:
+
+```reason
+Client.on(socket, m =>
+      switch (m) {
+      | Msg(msg) =>
+        switch (msg) {
+        | AddButton(name) => self.send(AddButton(name))
+        | RemoveButton(name) => self.send(RemoveButton(name))
+        }
+      | ClientDelta(amt) => self.send(ClientDelta(amt))
+      | Success((numClients, buttons)) =>
+        self.send(Success((numClients, buttons)))
+      }
+    );
+    Client.emit(socket, Howdy);
+```
+
+The `Client.on()` portion is pattern matching on the incoming `serverToClient` messages and mapping it to the proper ReasonReact `action`.  We also send back a `Howdy` message to the server once successfully loaded.
+
+The next order of business is our reducer.  We need to define how exactly each `action` shoudl mannipulate our `state`:
+
+```reason
+switch (action) {
+| AddButton(name) =>
+  ReasonReact.Update({
+    ...state,
+    buttons: List.append(state.buttons, [name]),
+  })
+| ClientDelta(amt) =>
+  ReasonReact.Update({...state, numClients: state.numClients + amt})
+| RemoveButton(name) =>
+  ReasonReact.Update({
+    ...state,
+    buttons: List.filter(b => b != name, state.buttons),
+  })
+| Success((numClients, buttons)) =>
+  ReasonReact.Update({...state, numClients, buttons})
+| UpdateTitle(newButtonTitle) =>
+  ReasonReact.Update({...state, newButtonTitle})
+},
+```
+
+The `...` spread operator is a huge help!  This code also takes advantage of a feature called `punning` - for instance, in `UpdateTitle(newButtonTitle)`, newButtonTitle is both being used as a temporary name for the message payload and the name of the field in the appState.  If they're named the same thing, we can use the shorthand `{...state, newButtonTitle}` instead of `{...state, newButtonTitle: newButtonTitle}`.
+
+All that's left to define is the UI!  The list of buttons will render each button name in our `state` as a button which when clicked will signal the removal of that button:
+
+```reason
+{ReasonReact.array(
+  self.state.buttons
+  |> List.map(button =>
+       <button
+         key=button
+         onClick={_ => {
+           self.send(RemoveButton(button));
+           Client.emit(socket, Msg(RemoveButton(button)));
+         }}>
+         {ReasonReact.string(button)}
+       </button>
+     )
+  |> Array.of_list,
+)}
+```
+
+We both send the `action` to our component's reducer as well as emit the `clientToServer` message to the server to make sure it gets removed everywhere.
+
+Next up is the box to set the name of any new button created:
+
+```reason
+<input
+  type_="text"
+  value={self.state.newButtonTitle}
+  onChange={evt =>
+    self.send(UpdateTitle(ReactEvent.Form.target(evt)##value))
+  }
+/>
+<button
+  onClick={_ => {
+    let name = self.state.newButtonTitle;
+    self.send(UpdateTitle(""));
+    self.send(AddButton(name));
+    Client.emit(socket, Msg(AddButton(name)));
+  }}>
+  {ReasonReact.string("Add button " ++ self.state.newButtonTitle)}
+</button>
+```
+
+Upon submitting, the component will reset the field to an empty string.
+
+The last bit is the count of total connected clients:
+
+```reason
+{ReasonReact.string(
+     (self.state.numClients |> string_of_int) ++ " connected",
+ )}
+```
+
+And that's a wrap!  Let's fire it up.  Assuming you're had `yarn start:re` and `yarn start:bundle` running, open a new terminal and finally invoke `yarn serve`.  Now open up a couple of browser windows, point them all to `localhost:3000` and you should see them remain in sync with each other as you add and remove buttons.  Hooray!

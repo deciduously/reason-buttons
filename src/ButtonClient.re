@@ -15,7 +15,7 @@ type action =
   | Success((int, list(string)))
   | UpdateTitle(string);
 
-let component = ReasonReact.reducerComponent("App");
+let component = ReasonReact.reducerComponent("ButtonClient");
 
 let make = _children => {
   ...component,
