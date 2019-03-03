@@ -1,0 +1,11 @@
+.DS_Store
+.merlin
+.bsb.lock
+*.log
+/lib/bs/
+/node_modules/
+.vscode
+/dist/
+/.cache/
+*.md
+**/*.bs.js
