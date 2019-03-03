@@ -1,6 +1,6 @@
 # Reason Buttons
 
-Simple `bs-socket` demo application with ReasonReact client app.
+Simple `bs-socket` demo application with ReasonReact client app.   Companion repo for [Real-Time Communication in ReasonML with bs-socket](https://dev.to/deciduously/real-time-communication-in-reasonml-with-bs-socket-1p5l).
 
 ## Dependencies
 
