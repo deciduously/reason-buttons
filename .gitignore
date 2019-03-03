@@ -7,5 +7,4 @@
 .vscode
 /dist/
 /.cache/
-*.md
 **/*.bs.js
