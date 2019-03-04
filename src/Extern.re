@@ -1,4 +1,4 @@
-[@bs.val] external portEnv: Js.Nullable.t(string) = "process.env.PORT";
+[@bs.val] external portEnv: option(string) = "process.env.PORT";
 [@bs.val] external parseInt: (string, int) => int = "parseInt";
 
 module Http = {

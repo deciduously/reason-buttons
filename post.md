@@ -46,7 +46,7 @@ I also renamed `start` to `start:re` - feel free to manage your scripts however 
 One change I always immediately make in a Node.js app is pulling the port number out so it can be specified via environment variable.  Luckily, interop is dirt simple!  We can just use Node to grab it from an environment variable.  Create a file at `src/Extern.re` with the following contents:
 
 ```ocaml
-[@bs.val] external portEnv: Js.Nullable.t(string) = "process.env.PORT";
+[@bs.val] external portEnv: option(string) = "process.env.PORT";
 [@bs.val] external parseInt: (string, int) => int = "parseInt";
 ```
 
@@ -58,14 +58,12 @@ This code will also leverage the `option` [data type utilities](https://bucklesc
 open Belt.Option;
 open Extern;
 
-let port = getWithDefault(portEnv |> Js.Nullable.toOption, "3000");
+let port = getWithDefault(portEnv, "3000");
 
 print_endline("Listening at *:" ++ port);
 ```
 
 I like to use `3000` for my default, you're of course welcome to use whatever you like.
-
-`|>` is the pipe operator.  In brief, `a |> b` is the same as `b(a)`.  It can be much more readable when chaining multiple functions.
 
 Over in `ButtonServer.bs.js` the compiled output is quite readable:
 
@@ -183,6 +181,8 @@ Http.listen(http, port |> int_of_string, () =>
   print_endline("Listening at *:" ++ port)
 );
 ```
+
+`|>` is the pipe operator.  In brief, `a |> b` is the same as `b(a)`.  It can be much more readable when chaining multiple functions.
 
 Just to verify it works, add a placeholder `/` endpoint, above the `Http.listen()` line.  We'll come back to the client.
 

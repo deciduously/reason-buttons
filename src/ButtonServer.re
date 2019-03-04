@@ -2,7 +2,7 @@ open Belt.Option;
 open Express;
 open Extern;
 
-let port = getWithDefault(portEnv |> Js.Nullable.toOption, "3000");
+let port = getWithDefault(portEnv, "3000");
 
 let app = Express.express();
 
